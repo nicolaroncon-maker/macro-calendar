@@ -1,0 +1,18 @@
+[
+  {
+    "title": "US Non Farm Payrolls",
+    "country": "USD",
+    "impact": "HIGH",
+    "date": "2026-09-03 14:30:00",
+    "forecast": "180K",
+    "previous": "150K"
+  },
+  {
+    "title": "ECB Interest Rate Decision",
+    "country": "EUR",
+    "impact": "HIGH",
+    "date": "2026-09-03 14:15:00",
+    "forecast": "3.25%",
+    "previous": "3.50%"
+  }
+]
