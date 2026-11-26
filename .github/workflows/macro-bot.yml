@@ -1,0 +1,77 @@
+# Bot macro su GitHub Actions: report delle 08:00 + alert prima degli eventi.
+# Salva questo file nel repo come:  .github/workflows/macro-bot.yml
+name: Macro bot
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"        # report: 08:00 italiane con ora legale
+    - cron: "0 7 * * 1-5"        # report: 08:00 italiane con ora solare
+    - cron: "*/5 6-19 * * 1-5"   # alert: controllo ogni 5 minuti nei giorni feriali
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = prova le fonti senza inviare nulla; report = invia un report ora"
+        type: choice
+        options: [report, check]
+        default: check
+
+jobs:
+  report:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '*/5 6-19 * * 1-5'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Esegui
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          CALENDAR_URL: ${{ secrets.CALENDAR_URL }}   # facoltativo, puoi ignorarlo
+          MODE: ${{ inputs.mode }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$MODE" = "check" ]; then
+            python macro_bot.py --check
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            python macro_bot.py --once
+          else
+            python macro_bot.py --once --only-hour=8
+          fi
+
+  alerts:
+    if: github.event.schedule == '*/5 6-19 * * 1-5'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: macro-alerts          # evita controlli sovrapposti e alert doppi
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Ripristina stato (alert gia' inviati)
+        uses: actions/cache/restore@v5
+        with:
+          path: state.json
+          key: alerts-state-${{ github.run_id }}
+          restore-keys: alerts-state-
+      - name: Controlla alert
+        id: alerts
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          CALENDAR_URL: ${{ secrets.CALENDAR_URL }}   # facoltativo, puoi ignorarlo
+          STATE_FILE: state.json
+        run: python macro_bot.py --alerts-once
+      - name: Salva stato
+        if: steps.alerts.outputs.changed == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: state.json
+          key: alerts-state-${{ github.run_id }}
