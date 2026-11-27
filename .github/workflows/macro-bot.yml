@@ -1,12 +1,15 @@
-# Bot macro su GitHub Actions: report delle 08:00 + alert prima degli eventi.
+# Bot macro su GitHub Actions: report giornaliero + alert prima degli eventi.
 # Salva questo file nel repo come:  .github/workflows/macro-bot.yml
 name: Macro bot
 
 on:
   schedule:
-    - cron: "0 6 * * 1-5"        # report: 08:00 italiane con ora legale
-    - cron: "0 7 * * 1-5"        # report: 08:00 italiane con ora solare
-    - cron: "*/5 6-19 * * 1-5"   # alert: controllo ogni 5 minuti nei giorni feriali
+    # Report: tentativi ogni 30 minuti al mattino (orari UTC, giorni feriali).
+    # Lo script invia UN solo report al giorno, alla prima esecuzione che parte
+    # dopo le 08:00 italiane. Se GitHub ne salta o ritarda qualcuna, basta la successiva.
+    - cron: "10,40 6-11 * * 1-5"
+    # Alert: controllo ogni 5 minuti nei giorni feriali (GitHub puo' ritardarlo).
+    - cron: "*/5 6-19 * * 1-5"
   workflow_dispatch:
     inputs:
       mode:
@@ -20,17 +23,28 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule != '*/5 6-19 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: macro-report          # evita due esecuzioni insieme e report doppi
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install requests
+      - name: Ripristina stato (report di oggi gia' inviato?)
+        uses: actions/cache/restore@v5
+        with:
+          path: report_state.json
+          key: report-state-${{ github.run_id }}
+          restore-keys: report-state-
       - name: Esegui
+        id: run
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           CALENDAR_URL: ${{ secrets.CALENDAR_URL }}   # facoltativo, puoi ignorarlo
+          REPORT_STATE_FILE: report_state.json
           MODE: ${{ inputs.mode }}
           EVENT: ${{ github.event_name }}
         run: |
@@ -39,8 +53,14 @@ jobs:
           elif [ "$EVENT" = "workflow_dispatch" ]; then
             python macro_bot.py --once
           else
-            python macro_bot.py --once --only-hour=8
+            python macro_bot.py --once --daily-window=8-12
           fi
+      - name: Salva stato
+        if: steps.run.outputs.changed == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: report_state.json
+          key: report-state-${{ github.run_id }}
 
   alerts:
     if: github.event.schedule == '*/5 6-19 * * 1-5'
