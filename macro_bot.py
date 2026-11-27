@@ -18,6 +18,10 @@ Uso
                                    (per un task programmato, es. account gratuito PythonAnywhere)
   python3 macro_bot.py --once --only-hour=8
                                    come --once, ma invia solo se l'ora italiana e' 8 (per GitHub Actions)
+  python3 macro_bot.py --once --daily-window=8-12
+                                   invia il report UNA sola volta al giorno, alla prima esecuzione
+                                   utile tra le 8:00 e le 11:59 ora italiana (anche se GitHub
+                                   parte in ritardo o salta qualche esecuzione)
   python3 macro_bot.py --alerts-once
                                    controlla gli eventi in arrivo, invia gli alert dovuti ed esce;
                                    ricorda gli alert gia' inviati in un file di stato (GitHub Actions)
@@ -535,6 +539,24 @@ def save_state(notified):
         json.dump({k: v.isoformat() for k, v in notified.items()}, f)
 
 
+REPORT_STATE_FILE = os.environ.get("REPORT_STATE_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "report_state.json")
+
+
+def load_report_state():
+    """Data (YYYY-MM-DD) dell'ultimo report giornaliero inviato, oppure stringa vuota."""
+    try:
+        with open(REPORT_STATE_FILE, encoding="utf-8") as f:
+            return str(json.load(f).get("last", ""))
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def save_report_state(day):
+    with open(REPORT_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"last": day}, f)
+
+
 def set_output(name, value):
     """Scrive un output per GitHub Actions (ignorato se non siamo su Actions)."""
     path = os.environ.get("GITHUB_OUTPUT")
@@ -613,8 +635,25 @@ def main():
 
     if "--once" in args:
         # modalita' per task programmato: un report con dati freschi, poi si esce
-        ok = send_telegram(build_report(cal, dt.datetime.now(TZ_ITA)))
+        now = dt.datetime.now(TZ_ITA)
+        window = arg_value(args, "--daily-window")
+        if window:
+            start_h, end_h = (int(x) for x in window.split("-"))
+            today = now.date().isoformat()
+            if not (start_h <= now.hour < end_h):
+                log.info("Fuori finestra (ora ITA %s, finestra %d:00-%d:00): nessun invio.",
+                         now.strftime("%H:%M"), start_h, end_h)
+                set_output("changed", "false")
+                return
+            if load_report_state() == today:
+                log.info("Report di oggi gia' inviato: nessun invio.")
+                set_output("changed", "false")
+                return
+        ok = send_telegram(build_report(cal, now))
         log.info("Report inviato" if ok else "Report NON inviato (vedi errori sopra)")
+        if window and ok:
+            save_report_state(today)
+        set_output("changed", "true" if (window and ok) else "false")
         sys.exit(0 if ok else 1)
 
     log.info("Bot avviato. Report programmati: %s", ", ".join(REPORT_TIMES))
